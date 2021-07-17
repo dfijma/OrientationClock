@@ -15,7 +15,9 @@ void setup() {
   pinMode(9, OUTPUT);
 }
 
-int value = 0;
+int hours = 0;
+int minutes = 0;
+int seconds = 0;
 
 
 static const uint8_t numbertable[2][10] = {{
@@ -80,15 +82,29 @@ void loop() {
     int orientation = digitalRead(ORIENTATION_PIN) == HIGH ? 1 : 0;
 
     if (orientation == 0) {
-      drawValue(value, 0);
-      matrix.drawColon(true);
+      drawValue(hours*100 + minutes, 0);
       noTone(9);            
     } else {
       tone(9, 220);
-      drawValue(value, 1);
-      matrix.drawColon(false);
+      drawValue(hours*100 + minutes, 1);
     }
-    value++;
+    
+    matrix.drawColon(seconds % 2 == 0);
+
     matrix.writeDisplay();
     delay(1000);  
+      // Now increase the seconds by one.
+  
+    seconds += 1;
+    if (seconds > 59) {
+      seconds = 0;
+      minutes += 1;
+      if (minutes > 59) {
+        minutes = 0;
+        hours += 1;
+        if (hours > 23) {
+          hours = 0;
+        }
+      }
+    }
 }
