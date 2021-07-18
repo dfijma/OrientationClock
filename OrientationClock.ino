@@ -14,11 +14,16 @@ void setup() {
   matrix.setBrightness(5);
   pinMode(ORIENTATION_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
+  Serial.begin(115200);
 }
+
 
 int hours = 0;
 int minutes = 0;
 int seconds = 0;
+int ms = 0;
+
+unsigned long previousMillis = 0;
 
 static const uint8_t numbertable[2][10] = {{
     0x3F, /* 0 */
@@ -49,17 +54,17 @@ void drawDigit(int pos, int x, boolean dot, int orientation) {
   matrix.writeDigitRaw(pos, numbertable[orientation][x] | (dot << 7));
 }
 
-void drawHoursMinutes(int orientation) {
-  drawDigit(0, hours / 10, false, orientation);
-  drawDigit(1, hours % 10, false, orientation);
-  drawDigit(2, minutes / 10, false, orientation);
-  drawDigit(3, minutes % 10, false, orientation);
+void drawHoursMinutes(boolean orientation) {
+  drawDigit(orientation ? 3 : 0, hours / 10, false, orientation);
+  drawDigit(orientation ? 2 : 1, hours % 10, false, orientation);
+  drawDigit(orientation ? 1 : 2, minutes / 10, false, orientation);
+  drawDigit(orientation ? 0 : 3, minutes % 10, false, orientation);
 }
 
 void loop() {
 
     // orientation switch closed == LOW (wires down) == "NORMAL" // switch open == HIGH, consider "upside down"
-    int orientation = digitalRead(ORIENTATION_PIN) == HIGH ? 1 : 0;
+    boolean orientation = digitalRead(ORIENTATION_PIN) == HIGH;
 
     if (orientation == 0) {
       drawHoursMinutes(0);
@@ -72,19 +77,22 @@ void loop() {
     matrix.drawColon(seconds % 2 == 0);
 
     matrix.writeDisplay();
-    delay(1000);  
-    
-    // Now increase the seconds by one.
-    seconds += 1;
-    if (seconds > 59) {
-      seconds = 0;
-      minutes += 1;
-      if (minutes > 59) {
-        minutes = 0;
-        hours += 1;
-        if (hours > 23) {
-          hours = 0;
-        }
-      }
-    }
+
+    Serial.print(hours); Serial.print(" "); Serial.println(minutes);
+
+    unsigned long currentMillis = millis();
+    ms += int (currentMillis - previousMillis);
+    previousMillis = currentMillis;
+
+    seconds += (ms / 1000);
+    ms = ms % 1000;
+
+    minutes += (seconds / 60);
+    seconds = seconds % 60;
+
+    hours += (minutes / 60);
+    minutes = minutes % 60;
+
+    hours = hours % 24;
+        
 }
