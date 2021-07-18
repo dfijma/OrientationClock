@@ -6,12 +6,14 @@
 Adafruit_7segment matrix = Adafruit_7segment();
 
 const int I2C_7SEGMENT = 0x70;
+const int BUTTON_PIN = 8;
 const int BUZZER_PIN = 9;
 const int ORIENTATION_PIN = 10;
 
 void setup() {
   matrix.begin(0x70);
   matrix.setBrightness(5);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(ORIENTATION_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
   Serial.begin(115200);
@@ -22,6 +24,8 @@ int hours = 0;
 int minutes = 0;
 int seconds = 0;
 int ms = 0;
+
+int prevButton = HIGH; // inactive
 
 unsigned long previousMillis = 0;
 
@@ -65,6 +69,10 @@ void loop() {
 
     // orientation switch closed == LOW (wires down) == "NORMAL" // switch open == HIGH, consider "upside down"
     boolean orientation = digitalRead(ORIENTATION_PIN) == HIGH;
+    int button = digitalRead(BUTTON_PIN);
+    
+    Serial.println(button);
+
 
     if (orientation == 0) {
       drawHoursMinutes(0);
@@ -78,12 +86,18 @@ void loop() {
 
     matrix.writeDisplay();
 
-    Serial.print(hours); Serial.print(" "); Serial.println(minutes);
-
     unsigned long currentMillis = millis();
     ms += int (currentMillis - previousMillis);
     previousMillis = currentMillis;
 
+    if (button == LOW && prevButton == HIGH) {
+      minutes++;
+      seconds = 0;
+      ms = 0;
+    }
+
+    prevButton = button;
+    
     seconds += (ms / 1000);
     ms = ms % 1000;
 
@@ -94,5 +108,7 @@ void loop() {
     minutes = minutes % 60;
 
     hours = hours % 24;
+
+    delay(10);
         
 }
