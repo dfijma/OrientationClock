@@ -21,8 +21,8 @@ void setup() {
   Serial.begin(115200);
 }
 
-int hours = 0;
-int minutes = 0;
+int hours[2] = {0};
+int minutes[2] = {0};
 int seconds = 0;
 int ms = 0;
 
@@ -34,7 +34,6 @@ struct BUTTON_STATE {
 };
 
 BUTTON_STATE buttonsState = { HIGH, HIGH, 0L, 0L };
-
 
 unsigned long previousMillis = 0;
 
@@ -66,17 +65,18 @@ void drawDigit(int pos, int x, boolean dot, int orientation) {
   if (pos > 1) pos++;
   matrix.writeDigitRaw(pos, numbertable[orientation][x] | (dot << 7));
 }
-void drawHoursMinutes(boolean orientation) {
-  drawDigit(orientation ? 3 : 0, hours / 10, false, orientation);
-  drawDigit(orientation ? 2 : 1, hours % 10, false, orientation);
-  drawDigit(orientation ? 1 : 2, minutes / 10, false, orientation);
-  drawDigit(orientation ? 0 : 3, minutes % 10, false, orientation);
+
+void drawHoursMinutes(int orientation, int buffer) {
+  drawDigit(orientation ? 3 : 0, hours[buffer] / 10, false, orientation);
+  drawDigit(orientation ? 2 : 1, hours[buffer] % 10, false, orientation);
+  drawDigit(orientation ? 1 : 2, minutes[buffer] / 10, false, orientation);
+  drawDigit(orientation ? 0 : 3, minutes[buffer] % 10, false, orientation);
 }
 
 void loop() {
 
     // orientation switch closed == LOW (wires down) == "NORMAL" // switch open == HIGH, consider "upside down"
-    boolean orientation = digitalRead(ORIENTATION_PIN) == HIGH;
+    int orientation = digitalRead(ORIENTATION_PIN);
     int buttonDown = digitalRead(BUTTON_DOWN_PIN);
     int buttonUp = digitalRead(BUTTON_UP_PIN);
 
@@ -90,7 +90,6 @@ void loop() {
       activeButton = -1;
       button = LOW;
     }
-    
 
     if (orientation == 0) {
       noTone(BUZZER_PIN);            
@@ -98,7 +97,7 @@ void loop() {
       tone(BUZZER_PIN, 220);
     }
     
-    drawHoursMinutes(orientation);
+    drawHoursMinutes(orientation, orientation);
     matrix.drawColon(seconds % 2 == 0);
     matrix.writeDisplay();
 
@@ -116,27 +115,29 @@ void loop() {
         buttonsState.activeState = LOW;
         buttonsState.holdState = HIGH;
         buttonsState.activeEntered = currentMillis;
-        minutes = minutes + activeButton;
+        minutes[orientation] = minutes[orientation] + activeButton;
       }
     } else if (buttonsState.activeState == LOW) {
       // active or active hold
       if (button == HIGH) {
         // going to inactive
         buttonsState.activeState = HIGH;
-        seconds = 0;
-        ms = 0;
+        if (orientation == 0) {
+          seconds = 0;
+          ms = 0;
+        }
       } else {
         if (buttonsState.holdState == HIGH) {
           // active, but not (yet) holding
           if ((currentMillis - buttonsState.activeEntered) > 2000) {
             buttonsState.holdState = LOW;
-            minutes += 30 * activeButton;
+            minutes[orientation] += 30 * activeButton;
             buttonsState.lastIncrementedDuringHold = currentMillis;
           }
         } else {
           // active hold
           if ((currentMillis - buttonsState.lastIncrementedDuringHold) > 500) {
-            minutes += 30 * activeButton; 
+            minutes[orientation] += 30 * activeButton; 
             buttonsState.lastIncrementedDuringHold = currentMillis;
           }
         }
@@ -146,20 +147,22 @@ void loop() {
     seconds += (ms / 1000);
     ms = ms % 1000;
 
-    minutes += (seconds / 60);
+    minutes[0] += (seconds / 60);
     seconds = seconds % 60;
 
-    if (minutes < 0) {
-      hours--;
-      minutes += 60;
-    }
-    
-    hours += (minutes / 60);
-    minutes = minutes % 60;
-
-    hours = hours % 24;
-    if (hours < 0) {
-      hours += 24;
+    for (int i=0; i<2; ++i) {
+      if (minutes[i] < 0) {
+        hours[i]--;
+        minutes[i] += 60;
+      }
+      
+      hours[i] += (minutes[i] / 60);
+      minutes[i] = minutes[i] % 60;
+  
+      hours[i] = hours[i] % 24;
+      if (hours[i] < 0) {
+        hours[i] += 24;
+      }
     }
 
     // small delay for button debounce
