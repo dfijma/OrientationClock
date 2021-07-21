@@ -35,6 +35,9 @@ struct BUTTON_STATE {
 
 BUTTON_STATE buttonsState = { HIGH, HIGH, 0L, 0L };
 
+unsigned long lastTriggerDisplayAlarm = 0;
+int lastOrientation = -1; // unknown
+
 unsigned long previousMillis = 0;
 
 static const uint8_t numbertable[2][10] = {{
@@ -75,12 +78,13 @@ void drawHoursMinutes(int orientation, int buffer) {
 
 void loop() {
 
-    // orientation switch closed == LOW (wires down) == "NORMAL" // switch open == HIGH, consider "upside down"
-    int orientation = digitalRead(ORIENTATION_PIN);
+    // get input and current time
+    int orientation = digitalRead(ORIENTATION_PIN); // "Normal" orientation == LOW (tilt sensor closed, active LOW)
     int buttonDown = digitalRead(BUTTON_DOWN_PIN);
     int buttonUp = digitalRead(BUTTON_UP_PIN);
+    unsigned long currentMillis = millis();
 
-    // just one button can be active (up overrides down)
+    // just one button can be active (UP overrides DOWN)
     int activeButton = 1;
     int button = HIGH; 
     if (buttonUp == LOW) {
@@ -91,31 +95,48 @@ void loop() {
       button = LOW;
     }
 
+    // TODO buzz
     if (orientation == 0) {
       noTone(BUZZER_PIN);            
     } else {
       tone(BUZZER_PIN, 220);
     }
-    
-    drawHoursMinutes(orientation, orientation);
-    matrix.drawColon(seconds % 2 == 0);
-    matrix.writeDisplay();
 
-    // update the time (only if no button is active)
-    unsigned long currentMillis = millis();
-    if (button == HIGH) {
-      ms += int (currentMillis - previousMillis);
-    }
+    // update time
+    ms += int (currentMillis - previousMillis);
     previousMillis = currentMillis;
+    
+    // are we displaying the alarm time, or the clock time?
+    boolean showAlarmTime = orientation && ((currentMillis - lastTriggerDisplayAlarm) < 5000) ? 1 : 0;
 
+    // process orientation switch
+    if (lastOrientation == 0 && orientation == 1) {
+      lastTriggerDisplayAlarm = currentMillis;
+      showAlarmTime = true;
+    }
+    lastOrientation = orientation;
+
+    // the most complicated part: the key processing state machine
     if (buttonsState.activeState == HIGH) {
-      // inactive
+      // curren state: inactive
       if (button == LOW) {
-        // going to 'active'
-        buttonsState.activeState = LOW;
-        buttonsState.holdState = HIGH;
-        buttonsState.activeEntered = currentMillis;
-        minutes[orientation] = minutes[orientation] + activeButton;
+        if (orientation == 1 && !showAlarmTime) {
+          // if we were not showing alarm time already, "eat" the button press to wake it up
+          showAlarmTime = true;
+          lastTriggerDisplayAlarm = currentMillis;
+          buttonsState.activeState = LOW;
+          buttonsState.holdState = HIGH;
+          buttonsState.activeEntered = currentMillis;
+        } else {
+          if (orientation == 1 && showAlarmTime) {
+             lastTriggerDisplayAlarm = currentMillis;
+          }
+          // going to 'active'
+          buttonsState.activeState = LOW;
+          buttonsState.holdState = HIGH;
+          buttonsState.activeEntered = currentMillis;
+          minutes[orientation] = minutes[orientation] + activeButton;
+        }
       }
     } else if (buttonsState.activeState == LOW) {
       // active or active hold
@@ -123,7 +144,7 @@ void loop() {
         // going to inactive
         buttonsState.activeState = HIGH;
         if (orientation == 0) {
-          seconds = 0;
+          seconds = seconds % 2;
           ms = 0;
         }
       } else {
@@ -133,17 +154,24 @@ void loop() {
             buttonsState.holdState = LOW;
             minutes[orientation] += 30 * activeButton;
             buttonsState.lastIncrementedDuringHold = currentMillis;
+            if (orientation == 1 && showAlarmTime) {
+              lastTriggerDisplayAlarm = currentMillis;
+            }
           }
         } else {
           // active hold
           if ((currentMillis - buttonsState.lastIncrementedDuringHold) > 500) {
             minutes[orientation] += 30 * activeButton; 
             buttonsState.lastIncrementedDuringHold = currentMillis;
+            if (orientation == 1 && showAlarmTime) {
+              lastTriggerDisplayAlarm = currentMillis;
+            }
           }
         }
       }
     } 
-        
+
+    // update clock and/or alarm time    
     seconds += (ms / 1000);
     ms = ms % 1000;
 
@@ -164,6 +192,19 @@ void loop() {
         hours[i] += 24;
       }
     }
+
+    // update display   
+    drawHoursMinutes(orientation, showAlarmTime);
+    if (showAlarmTime) {
+      matrix.drawColon(true);
+    } else {
+      if (buttonsState.activeState == LOW && buttonsState.holdState == LOW) {
+        matrix.drawColon(false);
+      } else {
+        matrix.drawColon(seconds % 2 == 0);
+      }
+    }
+    matrix.writeDisplay();
 
     // small delay for button debounce
     delay(10);
