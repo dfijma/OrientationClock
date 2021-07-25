@@ -1,7 +1,11 @@
 
 #include <Wire.h> 
 #include <Adafruit_GFX.h>
+#include <limits.h>
+
 #include "Adafruit_LEDBackpack.h"
+
+#include "RTClib.h"
 
 Adafruit_7segment matrix = Adafruit_7segment();
 
@@ -11,6 +15,8 @@ const int BUTTON_DOWN_PIN = 7;
 const int BUZZER_PIN = 9;
 const int ORIENTATION_PIN = 10;
 
+RTC_Millis rtc;
+
 void setup() {
   matrix.begin(0x70);
   matrix.setBrightness(5);
@@ -19,12 +25,11 @@ void setup() {
   pinMode(ORIENTATION_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
   Serial.begin(115200);
+  rtc.begin(DateTime(F(__DATE__), F(__TIME__)));
 }
 
 int hours[2] = {0};
 int minutes[2] = {0};
-int seconds = 0;
-int ms = 0;
 
 struct BUTTON_STATE {
   int activeState; // active or inactive
@@ -34,11 +39,7 @@ struct BUTTON_STATE {
 };
 
 BUTTON_STATE buttonsState = { HIGH, HIGH, 0L, 0L };
-
-unsigned long lastTriggerDisplayAlarm = 0;
-int lastOrientation = -1; // unknown
-
-unsigned long previousMillis = 0;
+unsigned long lastTriggerDisplayAlarm = LONG_MIN;
 
 static const uint8_t numbertable[2][10] = {{
     0x3F, /* 0 */
@@ -69,11 +70,11 @@ void drawDigit(int pos, int x, boolean dot, int orientation) {
   matrix.writeDigitRaw(pos, numbertable[orientation][x] | (dot << 7));
 }
 
-void drawHoursMinutes(int orientation, int buffer) {
-  drawDigit(orientation ? 3 : 0, hours[buffer] / 10, false, orientation);
-  drawDigit(orientation ? 2 : 1, hours[buffer] % 10, false, orientation);
-  drawDigit(orientation ? 1 : 2, minutes[buffer] / 10, false, orientation);
-  drawDigit(orientation ? 0 : 3, minutes[buffer] % 10, false, orientation);
+void drawHoursMinutes(int orientation, int hours, int minutes) {
+  drawDigit(orientation ? 3 : 0, hours / 10, false, orientation);
+  drawDigit(orientation ? 2 : 1, hours % 10, false, orientation);
+  drawDigit(orientation ? 1 : 2, minutes / 10, false, orientation);
+  drawDigit(orientation ? 0 : 3, minutes % 10, false, orientation);
 }
 
 void loop() {
@@ -83,6 +84,10 @@ void loop() {
     int buttonDown = digitalRead(BUTTON_DOWN_PIN);
     int buttonUp = digitalRead(BUTTON_UP_PIN);
     unsigned long currentMillis = millis();
+    DateTime now = rtc.now();
+
+
+    bool setRTC = false;
 
     // just one button can be active (UP overrides DOWN)
     int activeButton = 1;
@@ -102,81 +107,55 @@ void loop() {
       tone(BUZZER_PIN, 220);
     }
 
-    // update time
-    ms += int (currentMillis - previousMillis);
-    previousMillis = currentMillis;
-    
-    // are we displaying the alarm time, or the clock time?
-    boolean showAlarmTime = orientation && ((currentMillis - lastTriggerDisplayAlarm) < 5000) ? 1 : 0;
-
-    // process orientation switch
-    if (lastOrientation == 0 && orientation == 1) {
-      lastTriggerDisplayAlarm = currentMillis;
-      showAlarmTime = true;
-    }
-    lastOrientation = orientation;
+    // are we displaying actual clock time or buffer?
+    boolean showBufferTime = (currentMillis - lastTriggerDisplayAlarm) < 5000;
 
     // the most complicated part: the key processing state machine
     if (buttonsState.activeState == HIGH) {
-      // curren state: inactive
+      // current state: inactive
       if (button == LOW) {
-        if (orientation == 1 && !showAlarmTime) {
-          // if we were not showing alarm time already, "eat" the button press to wake it up
-          showAlarmTime = true;
-          lastTriggerDisplayAlarm = currentMillis;
-          buttonsState.activeState = LOW;
-          buttonsState.holdState = HIGH;
-          buttonsState.activeEntered = currentMillis;
-        } else {
-          if (orientation == 1 && showAlarmTime) {
-             lastTriggerDisplayAlarm = currentMillis;
+          if (orientation == 0) {
+            hours[0] = now.hour();
+            minutes[0] = now.minute();
           }
-          // going to 'active'
-          buttonsState.activeState = LOW;
-          buttonsState.holdState = HIGH;
-          buttonsState.activeEntered = currentMillis;
+        if (!showBufferTime) {
+          showBufferTime = true;
+        } else {
+
           minutes[orientation] = minutes[orientation] + activeButton;
         }
+        // going to 'active'
+        buttonsState.activeState = LOW;
+        buttonsState.holdState = HIGH;
+        buttonsState.activeEntered = currentMillis;
+        lastTriggerDisplayAlarm = currentMillis;
       }
     } else if (buttonsState.activeState == LOW) {
       // active or active hold
       if (button == HIGH) {
         // going to inactive
         buttonsState.activeState = HIGH;
-        if (orientation == 0) {
-          seconds = seconds % 2;
-          ms = 0;
+        if (orientation == 0 ) { 
+          setRTC = true;
         }
+
       } else {
         if (buttonsState.holdState == HIGH) {
           // active, but not (yet) holding
           if ((currentMillis - buttonsState.activeEntered) > 2000) {
             buttonsState.holdState = LOW;
-            minutes[orientation] += 30 * activeButton;
-            buttonsState.lastIncrementedDuringHold = currentMillis;
-            if (orientation == 1 && showAlarmTime) {
-              lastTriggerDisplayAlarm = currentMillis;
-            }
           }
         } else {
           // active hold
           if ((currentMillis - buttonsState.lastIncrementedDuringHold) > 500) {
             minutes[orientation] += 30 * activeButton; 
             buttonsState.lastIncrementedDuringHold = currentMillis;
-            if (orientation == 1 && showAlarmTime) {
-              lastTriggerDisplayAlarm = currentMillis;
-            }
+            lastTriggerDisplayAlarm = currentMillis;
           }
         }
       }
     } 
 
-    // update clock and/or alarm time    
-    seconds += (ms / 1000);
-    ms = ms % 1000;
-
-    minutes[0] += (seconds / 60);
-    seconds = seconds % 60;
 
     for (int i=0; i<2; ++i) {
       if (minutes[i] < 0) {
@@ -189,20 +168,21 @@ void loop() {
   
       hours[i] = hours[i] % 24;
       if (hours[i] < 0) {
-        hours[i] += 24;
+        hours[i] += 24; 
       }
     }
 
+    if (setRTC) {
+      rtc.adjust(DateTime(2020,1,1, hours[0], minutes[0], 0));
+    }
+    
     // update display   
-    drawHoursMinutes(orientation, showAlarmTime);
-    if (showAlarmTime) {
-      matrix.drawColon(true);
+    if (showBufferTime) {
+      drawHoursMinutes(orientation, hours[orientation], minutes[orientation]);   
+      matrix.drawColon(true);   
     } else {
-      if (buttonsState.activeState == LOW && buttonsState.holdState == LOW) {
-        matrix.drawColon(false);
-      } else {
-        matrix.drawColon(seconds % 2 == 0);
-      }
+      drawHoursMinutes(orientation, now.hour(), now.minute());
+      matrix.drawColon(false);   
     }
     matrix.writeDisplay();
 
