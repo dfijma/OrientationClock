@@ -13,9 +13,10 @@ const int I2C_7SEGMENT = 0x70;
 const int BUTTON_UP_PIN = 8;
 const int BUTTON_DOWN_PIN = 7;
 const int BUZZER_PIN = 9;
-const int ORIENTATION_PIN = 10;
+const int ORIENTATION_PIN = 12;
 
-RTC_Millis rtc;
+// RTC_Millis rtc;
+RTC_DS1307 rtc = RTC_DS1307();
 
 void setup() {
   matrix.begin(0x70);
@@ -25,7 +26,8 @@ void setup() {
   pinMode(ORIENTATION_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
   Serial.begin(115200);
-  rtc.begin(DateTime(F(__DATE__), F(__TIME__)));
+  // rtc.begin(DateTime(F(__DATE__), F(__TIME__)));
+  rtc.begin();
 }
 
 int hours[2] = {0};
@@ -182,7 +184,7 @@ void loop() {
       matrix.drawColon(true);   
     } else {
       drawHoursMinutes(orientation, now.hour(), now.minute());
-      matrix.drawColon(false);   
+      matrix.drawColon(now.second() % 2 == 0);   
     }
     matrix.writeDisplay();
 
