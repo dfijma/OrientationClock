@@ -2,9 +2,9 @@
 #include <Wire.h> 
 #include <Adafruit_GFX.h>
 #include <limits.h>
+#include <EEPROM.h>
 
 #include "Adafruit_LEDBackpack.h"
-
 #include "RTClib.h"
 
 Adafruit_7segment matrix = Adafruit_7segment();
@@ -15,8 +15,10 @@ const int BUTTON_DOWN_PIN = 7;
 const int BUZZER_PIN = 9;
 const int ORIENTATION_PIN = 12;
 
-// RTC_Millis rtc;
 RTC_DS1307 rtc = RTC_DS1307();
+
+int hours[2] = {0};
+int minutes[2] = {0};
 
 void setup() {
   matrix.begin(0x70);
@@ -26,12 +28,13 @@ void setup() {
   pinMode(ORIENTATION_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
   Serial.begin(115200);
-  // rtc.begin(DateTime(F(__DATE__), F(__TIME__)));
   rtc.begin();
+  EEPROM.get(0, hours[1]);
+  if (hours[1] < 0 || hours[1] > 23) hours[1] = 0;
+  EEPROM.get(sizeof(int), minutes[1]);
+  if (minutes[1] < 0 || minutes[1] > 59) minutes[1] = 0;
 }
 
-int hours[2] = {0};
-int minutes[2] = {0};
 
 struct BUTTON_STATE {
   int activeState; // active or inactive
@@ -79,6 +82,10 @@ void drawHoursMinutes(int orientation, int hours, int minutes) {
   drawDigit(orientation ? 0 : 3, minutes % 10, false, orientation);
 }
 
+inline int positive_modulo(int i, int n) {
+    return (i % n + n) % n;
+}
+
 void loop() {
 
     // get input and current time
@@ -95,18 +102,25 @@ void loop() {
     int activeButton = 1;
     int button = HIGH; 
     if (buttonUp == LOW) {
-      activeButton = 1;
+      activeButton = orientation == LOW ? 1 : -1;
       button = LOW;
     } else if (buttonDown == LOW) {
-      activeButton = -1;
+      activeButton = orientation == LOW ? -1 : 1;
       button = LOW;
     }
 
     // TODO buzz
-    if (orientation == 0) {
-      noTone(BUZZER_PIN);            
-    } else {
+    int n = now.hour() * 60 + now.minute();
+    int a = hours[1] * 60 + minutes[1];
+    int d = (n - a) % 1440;
+    if (d < 0) d+= 1440;
+    Serial.println(d);
+    bool buz = orientation == 1 && d >=0 && d < 10;
+    
+    if (buz) {
       tone(BUZZER_PIN, 220);
+    } else {
+      noTone(BUZZER_PIN);            
     }
 
     // are we displaying actual clock time or buffer?
@@ -114,41 +128,52 @@ void loop() {
 
     // the most complicated part: the key processing state machine
     if (buttonsState.activeState == HIGH) {
-      // current state: inactive
+      // current state: INACTIVE (clock is running)
+      
       if (button == LOW) {
-          if (orientation == 0) {
-            hours[0] = now.hour();
-            minutes[0] = now.minute();
-          }
-        if (!showBufferTime) {
-          showBufferTime = true;
-        } else {
+        // going to ACTIVE (setting time of alarm, not yet 'holding')
 
+        // init clock-setbuffer from RTC
+        hours[0] = now.hour();
+        minutes[0] = now.minute();
+
+        // first key is to display the alarm- or clock-setbuffer, subsequent presses increment or decrement the buffer
+        if (showBufferTime) {
+          // if already showing the buffer, increment of decrement it
           minutes[orientation] = minutes[orientation] + activeButton;
+        } else {
+          //... otherwise, 'eat' this press to display the buffer
+          showBufferTime = true;
         }
-        // going to 'active'
+        // shift state
         buttonsState.activeState = LOW;
         buttonsState.holdState = HIGH;
         buttonsState.activeEntered = currentMillis;
         lastTriggerDisplayAlarm = currentMillis;
       }
     } else if (buttonsState.activeState == LOW) {
-      // active or active hold
+      // ACTIVE or ACTIVE HOLD
       if (button == HIGH) {
-        // going to inactive
+        // going to INACTIVE
         buttonsState.activeState = HIGH;
         if (orientation == 0 ) { 
+          // remember to set the RTC from buffer (but buffer needs to be corrected first)
           setRTC = true;
+        } else {
+          // save alarm time in EEPROM
+          EEPROM.put(0, hours[1]);
+          EEPROM.put(sizeof(int), minutes[1]);
         }
 
       } else {
         if (buttonsState.holdState == HIGH) {
-          // active, but not (yet) holding
+          // ACTIVE, but not (yet) holding
           if ((currentMillis - buttonsState.activeEntered) > 2000) {
+            // but now HOLDING, as 2000 millisecs elapsed since first press
             buttonsState.holdState = LOW;
           }
         } else {
-          // active hold
+          // ACTIVE HOLDING, increment or decrement with 30 minutes every 500 millieseconds
           if ((currentMillis - buttonsState.lastIncrementedDuringHold) > 500) {
             minutes[orientation] += 30 * activeButton; 
             buttonsState.lastIncrementedDuringHold = currentMillis;
@@ -159,6 +184,7 @@ void loop() {
     } 
 
 
+    // correct buffer from over-/underflow
     for (int i=0; i<2; ++i) {
       if (minutes[i] < 0) {
         hours[i]--;
@@ -174,6 +200,7 @@ void loop() {
       }
     }
 
+    // set RTC from buffer
     if (setRTC) {
       rtc.adjust(DateTime(2020,1,1, hours[0], minutes[0], 0));
     }
