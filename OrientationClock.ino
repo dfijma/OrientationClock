@@ -27,11 +27,12 @@ void setup() {
   pinMode(BUTTON_UP_PIN, INPUT_PULLUP);
   pinMode(ORIENTATION_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
-  Serial.begin(115200);
+  // Serial.begin(115200);
   rtc.begin();
   EEPROM.get(0, hours[1]);
-  if (hours[1] < 0 || hours[1] > 23) hours[1] = 0;
   EEPROM.get(sizeof(int), minutes[1]);
+  // TODO: use a function (map, constrain?) to clip these values
+  if (hours[1] < 0 || hours[1] > 23) hours[1] = 0; 
   if (minutes[1] < 0 || minutes[1] > 59) minutes[1] = 0;
 }
 
@@ -86,6 +87,12 @@ inline int positive_modulo(int i, int n) {
     return (i % n + n) % n;
 }
 
+// state to generate buzzer
+bool playing = false;
+unsigned long nextChange = 0L;
+const int note = 523;
+const int noteDuration = 1000 / 4;
+
 void loop() {
 
     // get input and current time
@@ -94,7 +101,6 @@ void loop() {
     int buttonUp = digitalRead(BUTTON_UP_PIN);
     unsigned long currentMillis = millis();
     DateTime now = rtc.now();
-
 
     bool setRTC = false;
 
@@ -109,18 +115,23 @@ void loop() {
       button = LOW;
     }
 
-    // TODO buzz
-    int n = now.hour() * 60 + now.minute();
-    int a = hours[1] * 60 + minutes[1];
-    int d = (n - a) % 1440;
-    if (d < 0) d+= 1440;
-    Serial.println(d);
-    bool buz = orientation == 1 && d >=0 && d < 10;
+    // alarm?
+    const int d = positive_modulo((now.hour() * 60 + now.minute() - (hours[1] * 60 + minutes[1])), 1440); // "now" - "alarm"
+    const bool shouldBuz = orientation == 1 && d >=0 && d < 10;
     
-    if (buz) {
-      tone(BUZZER_PIN, 220);
+    // while 'shoudBuz', flip between note and silence
+    if (!playing && shouldBuz) {
+      if (currentMillis > nextChange) {
+        playing = true;
+        tone(BUZZER_PIN, note);
+        nextChange = currentMillis + noteDuration;
+      }
     } else {
-      noTone(BUZZER_PIN);            
+      if (currentMillis > nextChange) {
+        playing = false;
+        noTone(BUZZER_PIN);
+        nextChange = currentMillis + noteDuration * 1.3;
+      }
     }
 
     // are we displaying actual clock time or buffer?
@@ -186,6 +197,8 @@ void loop() {
 
     // correct buffer from over-/underflow
     for (int i=0; i<2; ++i) {
+
+      // TODO: use positive_modulo
       if (minutes[i] < 0) {
         hours[i]--;
         minutes[i] += 60;
@@ -194,6 +207,7 @@ void loop() {
       hours[i] += (minutes[i] / 60);
       minutes[i] = minutes[i] % 60;
   
+      // TODO: use positive_modulo
       hours[i] = hours[i] % 24;
       if (hours[i] < 0) {
         hours[i] += 24; 
@@ -202,6 +216,7 @@ void loop() {
 
     // set RTC from buffer
     if (setRTC) {
+      // we actually don't care about the date
       rtc.adjust(DateTime(2020,1,1, hours[0], minutes[0], 0));
     }
     
